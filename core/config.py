@@ -48,7 +48,7 @@ DEBUG_XAI_PARSER = True
 # 🤖 OpenAI
 # ============================================
 
-OPENAI_API_KEY = get_env("openai-api")
+OPENAI_API_KEY = "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"
 
 # ============================================
 # Prompt à envoyer à l'IA

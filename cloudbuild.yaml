@@ -1,0 +1,18 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/superbach1986/receipt-api', '.']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/superbach1986/receipt-api']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'receipt-api'
+      - '--image=gcr.io/superbach1986/receipt-api'
+      - '--region=northamerica-northeast1'  # 🇨🇦 Montréal
+      - '--platform=managed'
+      - '--port=8080'
+      - '--allow-unauthenticated'
