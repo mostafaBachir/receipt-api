@@ -43,47 +43,6 @@ def get_env(key: str) -> str:
 DEBUG_GPT_PARSER = True
 DEBUG_XAI_PARSER = True
 
-# ============================================
-# CORS
-# ============================================
-
-ALLOW_ORIGINS = [
-    "https://www.xpensify.ca",
-    "http://127.0.0.1:3001"
-]
-
-# ============================================
-# 🔐 Auth / JWT
-# ============================================
-
-SECRET_KEY = get_env("jwt-access-secret")
-ALGORITHM = get_env("jwt-algorithm") or "HS256"
-
-if not SECRET_KEY:
-    raise RuntimeError("❌ SECRET_KEY manquant dans les variables d'environnement")
-
-# ============================================
-# 🧠 MongoDB
-# ============================================
-
-MONGO_DB_STRING = get_env("mongo-db-string")
-MONGO_DB_NAME = get_env("mongo-db-name") or "xpensify"
-
-# ============================================
-# 🔴 Redis
-# ============================================
-
-REDIS_URL = get_env("redis-url")
-REDIS_PASSWORD = get_env("redis-password")
-REDIS_HOST = get_env("redis-host")
-
-# ============================================
-# 🟦 Azure Blob
-# ============================================
-
-AZURE_STORAGE_CONNECTION_STRING = get_env("azure-storage-connection-string")
-AZURE_BLOB_CONTAINER = "receipts"
-XPENSIFY_STORAGE_STRING = get_env("xpensify-storage-string")
 
 # ============================================
 # 🤖 OpenAI

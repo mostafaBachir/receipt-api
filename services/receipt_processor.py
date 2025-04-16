@@ -1,13 +1,15 @@
 import os
 import shutil
+import io
 from datetime import datetime
 from fastapi import UploadFile, HTTPException
+from PIL import Image, ImageEnhance
 from services.parser import parse_receipt_with_retries
 from services.vision_parser import parse_receipt_with_gpt
-from services.receipt_uploader import generate_blob_name, upload_receipt_to_blob
 from core.logger import get_logger
 from asyncio import create_task, gather
 from uuid import uuid4
+
 logger = get_logger("receipt-processor")
 
 ALLOWED_TYPES = {
@@ -18,70 +20,92 @@ ALLOWED_TYPES = {
 
 UPLOAD_DIR = "uploads"
 
-async def process_single_receipt(file: UploadFile, user: dict, parse: str = "gpt"):
+async def optimize_image(file_contents: bytes) -> bytes:
+    """Optimise l'image pour l'OCR"""
+    img = Image.open(io.BytesIO(file_contents))
+    
+    # Conversion en niveaux de gris si ce n'est pas un PDF
+    if img.mode != 'L':
+        img = img.convert('L')
+    
+    # Redimensionnement (max 1200px de large)
+    if img.width > 1200:
+        ratio = 1200 / img.width
+        img = img.resize((1200, int(img.height * ratio)))
+    
+    # Ajustement du contraste
+    img = ImageEnhance.Contrast(img).enhance(1.15)
+    
+    output_buffer = io.BytesIO()
+    img.save(output_buffer, format='JPEG', quality=85, optimize=True)
+    return output_buffer.getvalue()
+
+async def process_single_receipt(file: UploadFile, parse: str = "gpt"):
     """
-    1. Vérifie le type MIME
-    2. Sauvegarde temporairement le fichier en local
-    3. Parse avec GPT ou XAI (avec retry intégré)
-    4. Upload vers Azure Blob Storage (en parallèle ou seul)
-    5. Supprime le fichier local
-    6. Retourne le résumé + données parsées (optionnel)
+    Processus optimisé :
+    1. Vérification du type MIME
+    2. Prétraitement de l'image (si JPEG/PNG)
+    3. Sauvegarde temporaire
+    4. Parsing avec retry
+    5. Nettoyage
     """
     content_type = file.content_type
     if content_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Type non supporté : {content_type}"
-        )
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    random_hex = os.urandom(4).hex()
-    extension = ALLOWED_TYPES[content_type]
-    local_filename = f"{timestamp}_{random_hex}{extension}"
-    local_path = os.path.join(UPLOAD_DIR, local_filename)
-    print(file.filename)
-    with open(local_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        raise HTTPException(400, detail=f"Type non supporté : {content_type}")
 
     try:
-        blob_name = generate_blob_name(str(user["user_id"]), file.filename)
+        # Lecture du fichier
+        file_contents = await file.read()
+        
+        # Optimisation pour les images (sauf PDF)
+        if content_type != "application/pdf":
+            file_contents = await optimize_image(file_contents)
 
-        upload_task = create_task(upload_receipt_to_blob(local_path, blob_name))
+        # Sauvegarde temporaire
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        local_filename = f"{timestamp}_{os.urandom(4).hex()}{ALLOWED_TYPES[content_type]}"
+        local_path = os.path.join(UPLOAD_DIR, local_filename)
+        
+        with open(local_path, "wb") as buffer:
+            buffer.write(file_contents)
 
-        if parse == "gpt":
-            parse_task = create_task(parse_receipt_with_retries(local_path, parse_receipt_with_gpt))
-        elif parse == "xai":
-            from services.vision_parser import parse_receipt_with_xai
-            parse_task = create_task(parse_receipt_with_xai(local_path))
-        else:
-            parse_task = None
+        # Parsing
+        parser_map = {
+            "gpt": parse_receipt_with_gpt,
+            "xai": globals().get("parse_receipt_with_xai")
+        }
+        
+        if parse not in parser_map or not parser_map[parse]:
+            raise HTTPException(400, detail=f"Parseur inconnu : {parse}")
 
-        if parse_task:
-            parsed, blob_url = await gather(parse_task, upload_task)
-        else:
-            blob_url = await upload_task
-            parsed = {}
-
+        parse_task = create_task(
+            parse_receipt_with_retries(local_path, parser_map[parse])
+        )
+        parsed_result = await gather(parse_task)
+        
         return {
-            "id": str(uuid4()),  # 👈 identifiant unique pour ce reçu
-            "filename": local_filename,
-            "blob_url": blob_url,
-            "summary": parsed.get("summary") if parsed else None,
-            "parsed": parsed.get("data") if parsed else None,
-            "parser": parse or None,
-            "success": True,
+            "id": str(uuid4()),
+            "filename": file.filename,
+            "optimized_filename": local_filename,
+            "size_original": len(file_contents),
+            "summary": parsed_result[0].get("summary"),
+            "parsed": parsed_result[0].get("data"),
+            "parser": parse,
+            "success": True
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ Erreur traitement reçu : {e}")
+        logger.error(f"Erreur traitement reçu {file.filename}: {str(e)}", exc_info=True)
         return {
-            "filename": local_filename,
+            "filename": file.filename,
             "error": str(e),
-            "success": False,
+            "success": False
         }
-
     finally:
-        try:
-            os.remove(local_path)
-        except Exception as e:
-            logger.warning(f"⚠️ Suppression fichier local échouée : {e}")
+        if 'local_path' in locals() and os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+            except Exception as e:
+                logger.warning(f"Échec suppression {local_path}: {str(e)}")
