@@ -1,0 +1,87 @@
+trigger:
+- main
+
+# =====================================
+# 🔐 Variables (standard + groupe)
+# =====================================
+variables:
+  - group: receipt-acr  # Charge les secrets depuis Key Vault via Azure DevOps
+
+  # Variables locales au pipeline
+  - name: azureContainerRegistry
+    value: 'xpensifyacr.azurecr.io'
+  - name: imageRepository
+    value: 'xpensify-receipt-api'
+  - name: containerAppName
+    value: 'receipt-service'
+  - name: resourceGroup
+    value: 'BachirPro'
+
+# =====================================
+# 🐳 Étape de build & push de l'image
+# =====================================
+stages:
+- stage: BuildAndPush
+  displayName: 🐳 Build and Push to ACR
+  jobs:
+  - job: Docker
+    displayName: 📦 Build & Push Docker Image
+    pool:
+      name: Default
+    steps:
+    - checkout: self
+
+    - task: AzureCLI@2
+      displayName: 🔐 Login to ACR
+      inputs:
+        azureSubscription: 'xpensify-azure-rm-reciept'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az acr login --name xpensifyacr
+
+    - script: |
+        echo "📦 Building image with tag: latest"
+        docker build --no-cache -t $(azureContainerRegistry)/$(imageRepository):v03 .
+        docker push $(azureContainerRegistry)/$(imageRepository):v03
+      displayName: 🏗️ Docker Build & Push
+
+# =====================================
+# 🚀 Étape de déploiement
+# =====================================
+- stage: Deploy
+  displayName: 🚀 Deploy to Azure Container Apps
+  dependsOn: BuildAndPush
+  jobs:
+  - job: DeployJob
+    displayName: 🚀 Deploy Receipt Service
+    pool:
+      name: default
+    steps:
+    - task: AzureCLI@2
+      displayName: 📤 Deploy to Container App
+      inputs:
+        azureSubscription: 'xpensify-azure-rm-reciept'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "🚀 Updating container image to: latest"
+
+          az containerapp update \
+            --name $(containerAppName) \
+            --resource-group $(resourceGroup) \
+            --image $(azureContainerRegistry)/$(imageRepository):v03
+            --set-env-vars \
+              JWT_ACCESS_SECRET=$(jwt-access-secret) \
+              JWT_ALGORITHM=$(jwt-algorithm) \
+              MONGO_DB_STRING=$(mongo-db-string) \
+              OPENAI_API=$(openai-api) \
+              REDIS_URL=$(redis-url) \
+              REDIS_PASSWORD=$(redis-password) \
+              REDIS_HOST=$(redis-host) \
+              ALLOWED_ORIGINS=$(allowed-origins) \
+              AZURE_STORAGE_CONNECTION_STRING=$(azure-storage-connection-string) \
+              AZURE_BLOB_CONTAINER=$(azure-blob-container) \
+              XPENSIFY_STORAGE_STRING=$(xpensify-storage-string) \
+              AUTH_SERVICE_PORT=$(auth-service-port) \
+              MONGO_DB_NAME=$(mongo-db-name)
