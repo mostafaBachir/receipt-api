@@ -18,7 +18,8 @@ ALLOWED_TYPES = {
     "application/pdf": ".pdf"
 }
 
-UPLOAD_DIR = "uploads"
+UPLOAD_DIR = "/tmp/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 async def optimize_image(file_contents: bytes) -> bytes:
     """Optimise l'image pour l'OCR"""
