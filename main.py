@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-
+import os
 
 from routes.receipts import router as receipt_router
 from routes.health import router as health_router
@@ -10,10 +10,9 @@ from routes.health import router as health_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        import asyncio
         print("✅ Services initialisés")
     except Exception as e:
-        print(f"⚠️ Redis listener non démarré : {e}")
+        print(f"⚠️ Services initialization error: {e}")
     yield
     print("🛑 Xpensify Receipt API arrêtée proprement.")
 

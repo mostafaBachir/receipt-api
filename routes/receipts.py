@@ -49,37 +49,27 @@ async def upload_receipts(files: List[UploadFile] = File(...)):
     
     for file in files:
         try:
-            # Validation basique du type de fichier
             if file.content_type not in ['image/jpeg', 'image/png', 'application/pdf']:
-                raise HTTPException(400, detail=f"Type de fichier non supporté: {file.content_type}")
-                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type de fichier non supporté: {file.content_type}"
+                )
+            
             tasks.append(process_and_optimize_receipt(file))
             
         except Exception as e:
-            logger.error(f"Erreur pré-traitement {file.filename}", exc_info=True)
-            tasks.append(asyncio.sleep(0))  # Placeholder pour garder l'ordre
-            continue
-
-    # Exécution en parallèle avec gestion des erreurs
-    processed_results = []
-    for i, task in enumerate(asyncio.as_completed(tasks)):
-        try:
-            result = await task
-            processed_results.append(result)
-        except Exception as e:
-            file = files[i]
-            processed_results.append({
-                "filename": file.filename,
-                "error": str(e),
-                "success": False
-            })
-            logger.error(f"Échec traitement {file.filename}", exc_info=True)
-
-    # Statistiques de traitement
-    success_count = sum(1 for r in processed_results if isinstance(r, dict) and r.get("success", False))
+            logger.error(f"Erreur lors du traitement de {file.filename}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Erreur lors du traitement de {file.filename}: {str(e)}"
+            )
     
-    return {
-        "processed": success_count,
-        "failed": len(processed_results) - success_count,
-        "results": processed_results
-    }
+    try:
+        results = await asyncio.gather(*tasks)
+        return {"results": results}
+    except Exception as e:
+        logger.error("Erreur lors du traitement des fichiers", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors du traitement des fichiers: {str(e)}"
+        )

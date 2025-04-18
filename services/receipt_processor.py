@@ -50,63 +50,47 @@ async def process_single_receipt(file: UploadFile, parse: str = "gpt"):
     4. Parsing avec retry
     5. Nettoyage
     """
-    content_type = file.content_type
-    if content_type not in ALLOWED_TYPES:
-        raise HTTPException(400, detail=f"Type non supporté : {content_type}")
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Type de fichier non supporté: {file.content_type}"
+        )
 
     try:
-        # Lecture du fichier
+        # Génération d'un nom de fichier unique
+        file_id = str(uuid4())
+        extension = ALLOWED_TYPES[file.content_type]
+        temp_path = os.path.join(UPLOAD_DIR, f"{file_id}{extension}")
+        
+        # Lecture et optimisation du fichier
         file_contents = await file.read()
-        
-        # Optimisation pour les images (sauf PDF)
-        if content_type != "application/pdf":
+        if file.content_type in ['image/jpeg', 'image/png']:
             file_contents = await optimize_image(file_contents)
-
+        
         # Sauvegarde temporaire
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        local_filename = f"{timestamp}_{os.urandom(4).hex()}{ALLOWED_TYPES[content_type]}"
-        local_path = os.path.join(UPLOAD_DIR, local_filename)
+        with open(temp_path, "wb") as temp_file:
+            temp_file.write(file_contents)
         
-        with open(local_path, "wb") as buffer:
-            buffer.write(file_contents)
-
-        # Parsing
-        parser_map = {
-            "gpt": parse_receipt_with_gpt,
-            "xai": globals().get("parse_receipt_with_xai")
-        }
-        
-        if parse not in parser_map or not parser_map[parse]:
-            raise HTTPException(400, detail=f"Parseur inconnu : {parse}")
-
-        parse_task = create_task(
-            parse_receipt_with_retries(local_path, parser_map[parse])
-        )
-        parsed_result = await gather(parse_task)
+        # Parsing avec le bon service
+        if parse == "gpt":
+            result = await parse_receipt_with_gpt(temp_path)
+        else:
+            result = await parse_receipt_with_retries(temp_path)
+            
+        # Nettoyage
+        os.remove(temp_path)
         
         return {
-            "id": str(uuid4()),
             "filename": file.filename,
-            "optimized_filename": local_filename,
-            "size_original": len(file_contents),
-            "summary": parsed_result[0].get("summary"),
-            "parsed": parsed_result[0].get("data"),
-            "parser": parse,
+            "parsed_data": result,
             "success": True
         }
-
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logger.error(f"Erreur traitement reçu {file.filename}: {str(e)}", exc_info=True)
-        return {
-            "filename": file.filename,
-            "error": str(e),
-            "success": False
-        }
-    finally:
-        if 'local_path' in locals() and os.path.exists(local_path):
-            try:
-                os.remove(local_path)
-            except Exception as e:
-                logger.warning(f"Échec suppression {local_path}: {str(e)}")
+        logger.error(f"Erreur traitement {file.filename}", exc_info=True)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors du traitement: {str(e)}"
+        )
